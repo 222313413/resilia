@@ -1,0 +1,649 @@
+---
+title: "all draft backup"
+author: "Valentina Lasma Situmorang/222313413/2KS2"
+date: "2025-07-22"
+output: html_document
+---
+
+```{r}
+---
+title: "all draft"
+author: "Valentina Lasma Situmorang/222313413/2KS2"
+date: "2025-07-22"
+output: html_document
+---
+```
+
+```{r}
+library(shiny)
+library(shinydashboard)
+library(tidyverse)
+library(haven)
+library(sf)
+library(leaflet)
+library(ggplot2)
+library(plotly)
+library(DT)
+library(car)
+library(shinyWidgets)
+library(cluster)
+library(factoextra)
+library(readxl)     # Untuk membaca file Excel (.xlsx)
+library(fresh)
+
+mytheme <- create_theme(
+  adminlte_color(blue = "#3b82f6", green = "#10b981", yellow = "#facc15", red = "#ef4444"),
+  adminlte_sidebar(dark_bg = "#1f2937", dark_hover_bg = "#374151", dark_color = "#e5e7eb"),
+  adminlte_global(content_bg = "#f9fafb")
+)
+
+# Load data
+sovi_data <- read_excel("data/sovi_data.xlsx")
+
+sovi_data$POVERTY <- as.numeric(gsub("[^0-9.]", "", sovi_data$POVERTY))
+
+
+distance_matrix <- read_excel("data/distance.xlsx")
+geojson_data <- st_read("data/indonesia-prov.geojson")
+
+# UI
+ui <- dashboardPage(
+  dashboardHeader(title = "RESILIA"),
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Beranda", tabName = "beranda", icon = icon("home")),
+      menuItem("Manajemen Data", tabName = "manajemen", icon = icon("cogs")),
+      menuItem("Eksplorasi Data", tabName = "eksplorasi", icon = icon("chart-bar")),
+      menuItem("Uji Asumsi", tabName = "asumsi", icon = icon("vial")),
+      menuItem("Statistik Inferensia", icon = icon("chart-line"),
+        menuSubItem("Uji Rata-rata", tabName = "rata"),
+        menuSubItem("Uji Proporsi & Variansi", tabName = "propvar"),
+        menuSubItem("ANOVA", tabName = "anova")
+      ),
+      menuItem("Regresi Linear", tabName = "regresi", icon = icon("project-diagram")),
+      menuItem("Clustering", tabName = "clustering", icon = icon("object-group"))
+    )
+  ),
+  dashboardBody(
+    use_theme(mytheme),
+    tabItems(
+      # Tab 1: Beranda
+      tabItem(tabName = "beranda",
+        fluidRow(
+          box(title = "Tentang Dashboard", width = 12, status = "primary", solidHeader = TRUE,
+              h4("RESILIA: Analisis Kerentanan Sosial & Pemetaan Kerentanan di Indonesia"),
+              p("Dashboard ini dirancang untuk menganalisis berbagai indikator kerentanan sosial di Indonesia dengan pendekatan statistik eksploratif, inferensia, regresi, dan clustering. Data utama berasal dari SOVI dan matriks jarak antar wilayah."),
+              p("Tujuan: Menyediakan insight berbasis data untuk mendukung perumusan kebijakan penanggulangan risiko sosial dan bencana secara regional.")
+          )
+        )
+      ),
+
+      # Tab 2: Manajemen Data
+      tabItem(tabName = "manajemen",
+        fluidRow(
+          box(title = "Transformasi Variabel", status = "info", solidHeader = TRUE, width = 6,
+              selectInput("var_kat", "Pilih Variabel Kontinu:", names(sovi_data), selected = "POVERTY"),
+              sliderInput("breaks", "Jumlah Kategori:", min = 2, max = 5, value = 3),
+              actionButton("kategori_btn", "Kategorikan"),
+              DTOutput("kategori_tbl"),
+              verbatimTextOutput("kategori_interpretasi")
+          ),
+          box(title = "Filter & Subset", status = "warning", solidHeader = TRUE, width = 6,
+              pickerInput("pulau_filter", "Filter Pulau:", choices = unique(sovi_data$PULAU), multiple = TRUE),
+              actionButton("filter_btn", "Terapkan Filter"),
+              DTOutput("filtered_tbl")
+          )
+        )
+      ),
+
+      # Tab 3: Eksplorasi Data
+      tabItem(tabName = "eksplorasi",
+        fluidRow(
+          box(title = "Pilih Variabel", status = "primary", width = 4,
+              selectInput("eksplor_var", "Indikator:", choices = c("POVERTY", "LOWEDU", "NOELECTRIC", "DPRONE", "NOTRAINING", "FEMALE", "ELDERLY", "POPULATION", "GROWTH"))
+          ),
+          valueBoxOutput("total_prov"),
+          valueBoxOutput("total_indikator"),
+          valueBoxOutput("total_pulau")
+        ),
+        fluidRow(
+          box(title = "Peta Sebaran", width = 12, leafletOutput("map_eksplor"))
+        ),
+        fluidRow(
+          box(title = "Top 3 Provinsi", width = 6, DTOutput("top3_tbl")),
+          box(title = "Ringkasan Statistik", width = 6, verbatimTextOutput("ringkasan_stats"))
+        ),
+        fluidRow(
+          box(title = "Grafik Perbandingan Pulau", width = 6,
+              radioButtons("grafik_tipe", "Jenis Grafik:", choices = c("Bar", "Pie", "Donut")),
+              plotlyOutput("grafik_perbandingan")
+          ),
+          box(title = "Tabel Perbandingan", width = 6, DTOutput("tabel_perbandingan"))
+        )
+      )
+
+      ,
+      tabItem(tabName = "asumsi",
+        fluidRow(
+          box(title = "Uji Normalitas", status = "info", solidHeader = TRUE, width = 6,
+              selectInput("asumsi_var", "Pilih Variabel:", choices = names(sovi_data)),
+              plotOutput("hist_norm"),
+              plotOutput("qqplot"),
+              verbatimTextOutput("ks_test"),
+              verbatimTextOutput("normal_interpretasi")
+          ),
+          box(title = "Uji Homogenitas", status = "warning", solidHeader = TRUE, width = 6,
+              selectInput("homogen_var", "Pilih Variabel:", choices = names(sovi_data)),
+              selectInput("group_var", "Pilih Kategori Kelompok:", choices = names(sovi_data)),
+              plotOutput("boxplot_homogen"),
+              verbatimTextOutput("levene_test"),
+              verbatimTextOutput("homogen_interpretasi")
+          )
+        )
+      )
+      ,
+      tabItem(tabName = "rata",
+        fluidRow(
+          box(title = "Uji Beda Rata-rata", status = "primary", solidHeader = TRUE, width = 6,
+              selectInput("rata_var", "Pilih Variabel:", choices = names(sovi_data)),
+              radioButtons("rata_jenis", "Jenis Uji:", choices = c("Satu Kelompok" = "satu", "Dua Kelompok" = "dua")),
+              conditionalPanel(condition = "input.rata_jenis == 'dua'",
+                selectInput("group_var_rata", "Pilih Variabel Kelompok:", choices = names(sovi_data))
+              ),
+              numericInput("nilai_h0", "Nilai Hipotesis (untuk satu sampel):", value = 0),
+              actionButton("uji_rata_btn", "Lakukan Uji")
+          ),
+          box(title = "Hasil Uji", status = "info", solidHeader = TRUE, width = 6,
+              verbatimTextOutput("hasil_uji_rata"),
+              plotOutput("plot_rata"),
+              verbatimTextOutput("interpretasi_rata"),
+              downloadButton("download_rata", "Unduh Hasil Uji (TXT)")
+
+              
+          )
+        )
+      )
+      ,
+      tabItem(tabName = "propvar",
+        fluidRow(
+          box(title = "Uji Proporsi", status = "primary", solidHeader = TRUE, width = 6,
+              selectInput("proporsi_var", "Pilih Variabel:", choices = names(sovi_data)),
+              numericInput("nilai_prop", "Proporsi Hipotesis (%):", value = 50),
+              actionButton("uji_prop_btn", "Lakukan Uji Proporsi"),
+              verbatimTextOutput("hasil_uji_prop"),
+              verbatimTextOutput("interpretasi_prop"),
+              downloadButton("download_prop", "Unduh Hasil Uji (TXT)")
+          ),
+          box(title = "Uji Variansi", status = "warning", solidHeader = TRUE, width = 6,
+              selectInput("var_var", "Pilih Variabel:", choices = names(sovi_data)),
+              selectInput("var_group", "Kelompok Pembanding:", choices = names(sovi_data)),
+              actionButton("uji_var_btn", "Lakukan Uji Variansi"),
+              verbatimTextOutput("hasil_uji_var"),
+              verbatimTextOutput("interpretasi_var"),
+              downloadButton("download_var", "Unduh Hasil Uji (TXT)")
+          )
+        )
+      )
+    ,
+    tabItem(tabName = "anova",
+        fluidRow(
+          box(title = "Analisis ANOVA", status = "primary", solidHeader = TRUE, width = 6,
+              selectInput("anova_var", "Pilih Variabel:", choices = names(sovi_data)),
+              selectInput("anova_group", "Pilih Kelompok:", choices = names(sovi_data)),
+              actionButton("uji_anova_btn", "Lakukan Uji ANOVA")
+          ),
+          box(title = "Hasil Uji ANOVA", status = "info", solidHeader = TRUE, width = 6,
+              verbatimTextOutput("hasil_anova"),
+              plotOutput("plot_anova"),
+              verbatimTextOutput("interpretasi_anova"),
+              downloadButton("download_anova", "Unduh Hasil Uji (TXT)")
+          )
+        )
+      )
+      ,
+      tabItem(tabName = "regresi",
+        fluidRow(
+          box(title = "Model Regresi", status = "primary", solidHeader = TRUE, width = 6,
+              selectInput("target_var", "Pilih Variabel Target:", choices = names(sovi_data)),
+              pickerInput("prediktor_var", "Pilih Variabel Prediktor:", choices = names(sovi_data), multiple = TRUE),
+              actionButton("regresi_btn", "Lakukan Regresi")
+          ),
+          box(title = "Hasil Regresi", status = "info", solidHeader = TRUE, width = 6,
+              verbatimTextOutput("hasil_regresi"),
+              plotOutput("resid_plot"),
+              plotOutput("hist_resid"),
+              verbatimTextOutput("interpretasi_regresi"),
+              downloadButton("download_regresi", "Unduh Hasil Regresi (TXT)")
+          )
+        )
+      )
+    ,
+    tabItem(tabName = "clustering",
+        fluidRow(
+          box(title = "Pengaturan Clustering", status = "primary", solidHeader = TRUE, width = 4,
+              pickerInput("clust_vars", "Pilih Variabel untuk Clustering:", choices = names(sovi_data), multiple = TRUE),
+              radioButtons("clust_method", "Metode:", choices = c("Hierarchical", "K-Means")),
+              conditionalPanel(condition = "input.clust_method == 'K-Means'",
+                numericInput("k_cluster", "Jumlah Cluster:", value = 3, min = 2, max = 10)
+              ),
+              actionButton("clust_btn", "Lakukan Clustering")
+          ),
+          box(title = "Visualisasi Clustering", status = "info", solidHeader = TRUE, width = 8,
+              plotOutput("plot_clust"),
+              DTOutput("tabel_clust"),
+              verbatimTextOutput("interpretasi_clust"),
+              downloadButton("download_clust", "Unduh Hasil Clustering (CSV)")
+          )
+        )
+      )
+
+
+    )
+  )
+)
+
+# Server
+server <- function(input, output, session) {
+
+  # Info box eksplorasi
+  output$total_prov <- renderValueBox({
+    valueBox(value = length(unique(sovi_data$PROVINSI)), subtitle = "Total Provinsi", icon = icon("map"), color = "aqua")
+  })
+  output$total_indikator <- renderValueBox({
+    valueBox(9, subtitle = "Jumlah Indikator", icon = icon("sliders-h"), color = "green")
+  })
+  output$total_pulau <- renderValueBox({
+    valueBox(length(unique(sovi_data$PULAU)), subtitle = "Kelompok Pulau", icon = icon("globe"), color = "yellow")
+  })
+
+  # Manajemen Data: Kategorisasi
+  observeEvent(input$kategori_btn, {
+    req(input$var_kat)
+    var_data <- sovi_data[[input$var_kat]]
+    categorized <- cut(var_data, breaks = input$breaks, labels = FALSE)
+    output$kategori_tbl <- renderDT({
+      datatable(data.frame(Provinsi = sovi_data$PROVINSI, Kategori = categorized))
+    })
+    output$kategori_interpretasi <- renderPrint({
+      cat("Variabel", input$var_kat, "dikategorikan menjadi", input$breaks, "kelompok.")
+    })
+  })
+
+  # Manajemen Data: Filter
+  observeEvent(input$filter_btn, {
+    req(input$pulau_filter)
+    filtered <- sovi_data %>% filter(PULAU %in% input$pulau_filter)
+    output$filtered_tbl <- renderDT({datatable(filtered)})
+  })
+
+  # Eksplorasi: Map & Statistik
+  output$map_eksplor <- renderLeaflet({
+  var_sel <- input$eksplor_var
+  df_join <- geojson_data %>% left_join(sovi_data, by = c("Propinsi" = "PROVINSI"))
+
+  pal <- colorNumeric(palette = "viridis", domain = df_join[[var_sel]], na.color = "#f0f0f0")
+
+  leaflet(df_join) %>%
+    addTiles() %>%
+    addPolygons(
+      fillColor = ~pal(get(var_sel)),
+      weight = 1,
+      color = "white",
+      fillOpacity = 0.8,
+      smoothFactor = 0.5,
+      highlight = highlightOptions(weight = 3, color = "#666", bringToFront = TRUE),
+      label = ~paste0("<strong>", provinsi, "</strong><br>", var_sel, ": ", round(get(var_sel), 2)),
+      labelOptions = labelOptions(direction = "auto", style = list("font-weight" = "normal"))
+    ) %>%
+    addLegend(pal = pal, values = df_join[[var_sel]], opacity = 0.8, title = var_sel, position = "bottomright")
+})
+
+  output$top3_tbl <- renderDT({
+    var_sel <- input$eksplor_var
+    sovi_data %>% select(PROVINSI, PULAU, !!sym(var_sel)) %>% arrange(desc(!!sym(var_sel))) %>% head(3) %>% datatable()
+  })
+
+  output$ringkasan_stats <- renderPrint({
+    var_sel <- input$eksplor_var
+    df <- sovi_data %>% group_by(PULAU) %>% summarize(mean = mean(!!sym(var_sel), na.rm = TRUE))
+    total <- sum(sovi_data[[var_sel]], na.rm = TRUE)
+    avg <- mean(sovi_data[[var_sel]], na.rm = TRUE)
+    highest <- df %>% arrange(desc(mean)) %>% slice(1)
+    lowest <- df %>% arrange(mean) %>% slice(1)
+    cat("Total:", round(total, 2), "\n")
+    cat("Rata-rata:", round(avg, 2), "\n")
+    cat("Pulau Tertinggi:", highest$PULAU, "=", round(highest$mean, 2), "\n")
+    cat("Pulau Terendah:", lowest$PULAU, "=", round(lowest$mean, 2))
+  })
+
+  output$grafik_perbandingan <- renderPlotly({
+    var_sel <- input$eksplor_var
+    df <- sovi_data %>% group_by(PULAU) %>% summarize(val = mean(!!sym(var_sel), na.rm = TRUE))
+    p <- switch(input$grafik_tipe,
+                "Bar" = ggplot(df, aes(x = PULAU, y = val, fill = PULAU)) + geom_bar(stat = "identity"),
+                "Pie" = ggplot(df, aes(x = "", y = val, fill = PULAU)) + geom_bar(stat = "identity", width = 1) + coord_polar("y"),
+                "Donut" = ggplot(df, aes(x = 2, y = val, fill = PULAU)) + geom_bar(stat = "identity") + coord_polar("y") + xlim(0.5, 2.5)
+    )
+    ggplotly(p)
+  })
+
+  output$tabel_perbandingan <- renderDT({
+    var_sel <- input$eksplor_var
+    df <- sovi_data %>% group_by(PULAU) %>% summarize(Jumlah = sum(!!sym(var_sel), na.rm = TRUE))
+    df$Persentase <- round(df$Jumlah / sum(df$Jumlah) * 100, 2)
+    datatable(df)
+  })
+
+
+  # Uji Asumsi: Normalitas
+  output$hist_norm <- renderPlot({
+    req(input$asumsi_var)
+    ggplot(sovi_data, aes_string(x = input$asumsi_var)) +
+      geom_histogram(aes(y = ..density..), fill = "skyblue", color = "black", bins = 30) +
+      stat_function(fun = dnorm, args = list(mean = mean(sovi_data[[input$asumsi_var]], na.rm = TRUE),
+                                             sd = sd(sovi_data[[input$asumsi_var]], na.rm = TRUE)),
+                    col = "red") + theme_minimal()
+  })
+
+  output$qqplot <- renderPlot({
+    req(input$asumsi_var)
+    qqPlot(sovi_data[[input$asumsi_var]], main = "QQ Plot")
+  })
+
+  output$ks_test <- renderPrint({
+    req(input$asumsi_var)
+    x <- sovi_data[[input$asumsi_var]]
+    x <- x[!is.na(x)]
+    hasil <- ks.test(scale(x), "pnorm")
+    print(hasil)
+  })
+
+  output$normal_interpretasi <- renderPrint({
+    x <- sovi_data[[input$asumsi_var]]
+    x <- x[!is.na(x)]
+    pval <- ks.test(scale(x), "pnorm")$p.value
+    if (pval < 0.05) {
+      cat("p-value =", round(pval, 4), "< 0.05 → Data tidak normal.")
+    } else {
+      cat("p-value =", round(pval, 4), "> 0.05 → Data berdistribusi normal.")
+    }
+  })
+
+  # Uji Homogenitas
+  output$boxplot_homogen <- renderPlot({
+    req(input$homogen_var, input$group_var)
+    ggplot(sovi_data, aes_string(x = input$group_var, y = input$homogen_var)) +
+      geom_boxplot(fill = "lightgreen") + theme_minimal()
+  })
+
+  output$levene_test <- renderPrint({
+    req(input$homogen_var, input$group_var)
+    model <- as.formula(paste(input$homogen_var, "~", input$group_var))
+    print(leveneTest(model, data = sovi_data))
+  })
+
+  output$homogen_interpretasi <- renderPrint({
+    model <- as.formula(paste(input$homogen_var, "~", input$group_var))
+    pval <- leveneTest(model, data = sovi_data)$"Pr(>F)"[1]
+    if (pval < 0.05) {
+      cat("p-value =", round(pval, 4), "< 0.05 → Varians tidak homogen.")
+    } else {
+      cat("p-value =", round(pval, 4), "> 0.05 → Varians antar kelompok homogen.")
+    }
+})
+  
+    # Statistik Inferensia: Uji Rata-rata
+  observeEvent(input$uji_rata_btn, {
+    var <- input$rata_var
+    jenis <- input$rata_jenis
+
+    if (jenis == "satu") {
+      x <- sovi_data[[var]]
+      x <- x[!is.na(x)]
+      hasil <- t.test(x, mu = input$nilai_h0)
+      output$hasil_uji_rata <- renderPrint({ hasil })
+      output$plot_rata <- renderPlot({
+        ggplot(sovi_data, aes_string(y = var)) + geom_boxplot(fill = "skyblue") + theme_minimal()
+      })
+      output$interpretasi_rata <- renderPrint({
+        if (hasil$p.value < 0.05) {
+          cat("p-value =", round(hasil$p.value, 4), "< 0.05 → Terdapat perbedaan yang signifikan dari", input$nilai_h0)
+        } else {
+          cat("p-value =", round(hasil$p.value, 4), "> 0.05 → Tidak terdapat perbedaan yang signifikan dari", input$nilai_h0)
+        }
+      })
+    } else {
+      group <- input$group_var_rata
+      df <- sovi_data %>% select(!!sym(var), !!sym(group)) %>% drop_na()
+      hasil <- t.test(as.formula(paste(var, "~", group)), data = df)
+      output$hasil_uji_rata <- renderPrint({ hasil })
+      output$plot_rata <- renderPlot({
+        ggplot(df, aes_string(x = group, y = var)) + geom_boxplot(fill = "salmon") + theme_minimal()
+      })
+      output$interpretasi_rata <- renderPrint({
+        if (hasil$p.value < 0.05) {
+          cat("p-value =", round(hasil$p.value, 4), "< 0.05 → Rata-rata antar kelompok berbeda signifikan.")
+        } else {
+          cat("p-value =", round(hasil$p.value, 4), "> 0.05 → Rata-rata antar kelompok tidak berbeda signifikan.")
+        }
+      })
+    }
+  })
+  output$download_rata <- downloadHandler(
+  filename = function() {
+    paste("hasil_uji_rata", Sys.Date(), ".txt", sep = "")
+  },
+  content = function(file) {
+    sink(file)
+    var <- input$rata_var
+    jenis <- input$rata_jenis
+
+    if (jenis == "satu") {
+      x <- sovi_data[[var]]
+      x <- x[!is.na(x)]
+      print(t.test(x, mu = input$nilai_h0))
+    } else {
+      group <- input$group_var_rata
+      df <- sovi_data %>% select(!!sym(var), !!sym(group)) %>% drop_na()
+      print(t.test(as.formula(paste(var, "~", group)), data = df))
+    }
+    sink()
+  }
+)
+  
+
+    # Statistik Inferensia: Uji Proporsi
+  observeEvent(input$uji_prop_btn, {
+    var <- input$proporsi_var
+    nilai_prop <- input$nilai_prop / 100
+    x <- sovi_data[[var]] > (nilai_prop * 100)
+    hasil <- prop.test(sum(x, na.rm = TRUE), length(na.omit(x)), p = nilai_prop)
+    output$hasil_uji_prop <- renderPrint({ hasil })
+    output$interpretasi_prop <- renderPrint({
+      if (hasil$p.value < 0.05) {
+        cat("p-value =", round(hasil$p.value, 4), "< 0.05 → Proporsi berbeda signifikan dari", input$nilai_prop, "%")
+      } else {
+        cat("p-value =", round(hasil$p.value, 4), "> 0.05 → Proporsi tidak berbeda signifikan dari", input$nilai_prop, "%")
+      }
+    })
+  })
+  output$download_prop <- downloadHandler(
+  filename = function() {
+    paste("hasil_uji_prop", Sys.Date(), ".txt", sep = "")
+  },
+  content = function(file) {
+    sink(file)
+    var <- input$proporsi_var
+    nilai_prop <- input$nilai_prop / 100
+    x <- sovi_data[[var]] > (nilai_prop * 100)
+    print(prop.test(sum(x, na.rm = TRUE), length(na.omit(x)), p = nilai_prop))
+    sink()
+  }
+)
+
+  # Statistik Inferensia: Uji Variansi
+  observeEvent(input$uji_var_btn, {
+    var <- input$var_var
+    group <- input$var_group
+    df <- sovi_data %>% select(!!sym(var), !!sym(group)) %>% drop_na()
+    hasil <- bartlett.test(as.formula(paste(var, "~", group)), data = df)
+    output$hasil_uji_var <- renderPrint({ hasil })
+    output$interpretasi_var <- renderPrint({
+      if (hasil$p.value < 0.05) {
+        cat("p-value =", round(hasil$p.value, 4), "< 0.05 → Variansi antar kelompok berbeda signifikan.")
+      } else {
+        cat("p-value =", round(hasil$p.value, 4), "> 0.05 → Variansi antar kelompok tidak berbeda signifikan.")
+      }
+    })
+  })
+  output$download_var <- downloadHandler(
+  filename = function() {
+    paste("hasil_uji_variansi", Sys.Date(), ".txt", sep = "")
+  },
+  content = function(file) {
+    sink(file)
+    var <- input$var_var
+    group <- input$var_group
+    df <- sovi_data %>% select(!!sym(var), !!sym(group)) %>% drop_na()
+    print(bartlett.test(as.formula(paste(var, "~", group)), data = df))
+    sink()
+  }
+)
+  
+    # Statistik Inferensia: ANOVA
+  observeEvent(input$uji_anova_btn, {
+    var <- input$anova_var
+    group <- input$anova_group
+    df <- sovi_data %>% select(!!sym(var), !!sym(group)) %>% drop_na()
+    hasil <- aov(as.formula(paste(var, "~", group)), data = df)
+    output$hasil_anova <- renderPrint({ summary(hasil) })
+    output$plot_anova <- renderPlot({
+      ggplot(df, aes_string(x = group, y = var)) + geom_boxplot(fill = "orchid") + theme_minimal()
+    })
+    output$interpretasi_anova <- renderPrint({
+      pval <- summary(hasil)[[1]]$"Pr(>F)"[1]
+      if (pval < 0.05) {
+        cat("p-value =", round(pval, 4), "< 0.05 → Terdapat perbedaan signifikan rata-rata antar kelompok.")
+      } else {
+        cat("p-value =", round(pval, 4), "> 0.05 → Tidak terdapat perbedaan signifikan rata-rata antar kelompok.")
+      }
+    })
+  })
+  
+  output$download_anova <- downloadHandler(
+  filename = function() {
+    paste("hasil_uji_anova", Sys.Date(), ".txt", sep = "")
+  },
+  content = function(file) {
+    sink(file)
+    var <- input$anova_var
+    group <- input$anova_group
+    df <- sovi_data %>% select(!!sym(var), !!sym(group)) %>% drop_na()
+    hasil <- aov(as.formula(paste(var, "~", group)), data = df)
+    print(summary(hasil))
+    sink()
+  }
+)
+
+    # Regresi Linear Berganda
+  observeEvent(input$regresi_btn, {
+    req(input$target_var, input$prediktor_var)
+    formula <- as.formula(paste(input$target_var, "~", paste(input$prediktor_var, collapse = "+")))
+    df <- sovi_data %>% select(all_of(c(input$target_var, input$prediktor_var))) %>% drop_na()
+    model <- lm(formula, data = df)
+    output$hasil_regresi <- renderPrint({ summary(model) })
+
+    output$resid_plot <- renderPlot({
+      plot(model$fitted.values, model$residuals,
+           xlab = "Fitted Values", ylab = "Residuals",
+           main = "Residual vs Fitted", pch = 19, col = "blue")
+      abline(h = 0, col = "red")
+    })
+
+    output$hist_resid <- renderPlot({
+      hist(model$residuals, main = "Histogram Residuals", xlab = "Residuals",
+           col = "lightblue", border = "white")
+    })
+
+    output$interpretasi_regresi <- renderPrint({
+      r2 <- summary(model)$r.squared
+      cat("Model menjelaskan", round(r2 * 100, 2), "% variasi variabel", input$target_var)
+    })
+  })
+  
+  output$download_regresi <- downloadHandler(
+  filename = function() {
+    paste("hasil_regresi", Sys.Date(), ".txt", sep = "")
+  },
+  content = function(file) {
+    sink(file)
+    formula <- as.formula(paste(input$target_var, "~", paste(input$prediktor_var, collapse = "+")))
+    df <- sovi_data %>% select(all_of(c(input$target_var, input$prediktor_var))) %>% drop_na()
+    model <- lm(formula, data = df)
+    print(summary(model))
+    sink()
+  }
+)
+  
+  # Clustering
+  observeEvent(input$clust_btn, {
+    req(input$clust_vars)
+    df <- sovi_data %>% select(all_of(input$clust_vars)) %>% scale() %>% na.omit()
+
+    if (input$clust_method == "Hierarchical") {
+      hc <- hclust(dist(df))
+      cluster <- cutree(hc, k = 3)
+      output$plot_clust <- renderPlot({
+        plot(hc, labels = FALSE, main = "Dendrogram Hierarchical Clustering")
+        rect.hclust(hc, k = 3, border = "red")
+      })
+    } else if (input$clust_method == "K-Means") {
+      km <- kmeans(df, centers = input$k_cluster, nstart = 25)
+      cluster <- km$cluster
+      output$plot_clust <- renderPlot({
+        fviz_cluster(list(data = df, cluster = cluster))
+      })
+    }
+
+    output$tabel_clust <- renderDT({
+      result <- sovi_data %>% mutate(Cluster = factor(cluster)) %>% select(PROVINSI, PULAU, Cluster)
+      datatable(result)
+    })
+
+    output$interpretasi_clust <- renderPrint({
+      cat("Clustering berhasil dilakukan pada", nrow(df), "provinsi berdasarkan", length(input$clust_vars), "variabel.\n")
+      if (input$clust_method == "K-Means") {
+        cat("Metode: K-Means dengan", input$k_cluster, "cluster.\n")
+      } else {
+        cat("Metode: Hierarchical Clustering dengan 3 cluster.\n")
+      }
+    })
+  })
+  
+  output$download_clust <- downloadHandler(
+  filename = function() {
+    paste("hasil_clustering", Sys.Date(), ".csv", sep = "")
+  },
+  content = function(file) {
+    req(input$clust_vars)
+    df <- sovi_data %>% select(all_of(input$clust_vars)) %>% scale() %>% na.omit()
+
+    if (input$clust_method == "Hierarchical") {
+      hc <- hclust(dist(df))
+      cluster <- cutree(hc, k = 3)
+    } else {
+      km <- kmeans(df, centers = input$k_cluster, nstart = 25)
+      cluster <- km$cluster
+    }
+
+    result <- sovi_data %>% mutate(Cluster = factor(cluster)) %>% select(PROVINSI, PULAU, Cluster)
+    write.csv(result, file, row.names = FALSE)
+  }
+)
+}
+
+# Run App
+shinyApp(ui, server)
+
+```
+```
